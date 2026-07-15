@@ -311,6 +311,34 @@ header h1 {
   border-color: var(--accent);
 }
 
+.row-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.clear-rows {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.clear-rows:hover:not(:disabled) {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.clear-rows:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .sidebar {
   position: sticky;
   top: 1.5rem;
@@ -346,6 +374,34 @@ header h1 {
 .sidebar-tabs button.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
+}
+
+.kill-switch {
+  margin-left: auto;
+  background: var(--error) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 0.35rem 0.7rem !important;
+  font-size: 0.8rem !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+  animation: kill-pulse 1.5s ease-in-out infinite;
+}
+
+.kill-switch:hover {
+  filter: brightness(1.15);
+}
+
+.kill-switch:disabled {
+  opacity: 0.6;
+  cursor: default;
+  animation: none;
+}
+
+@keyframes kill-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
 }
 
 .queue-empty {
@@ -386,6 +442,10 @@ header h1 {
 
 .queue-status-dot.error {
   background: var(--error);
+}
+
+.queue-status-dot.killed {
+  background: var(--muted);
 }
 
 @keyframes queue-pulse {

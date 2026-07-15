@@ -23,6 +23,41 @@ app.use(express.json());
 // batchId -> { jobs: [{url, limit, category, domain, status}], logs, clients, status, merged }
 const batches = new Map();
 
+// spawn()'d scrape.js launches its own Puppeteer/Chrome subprocess. Killing
+// just the immediate Node child (proc.kill) leaves that browser process
+// orphaned and still running -- on Windows in particular, TerminateProcess
+// doesn't cascade to children at all, so the "killed" job keeps consuming
+// CPU/network in the background even though the batch is marked killed.
+// This kills the whole process tree instead of just the top process.
+function killProcessTree(proc) {
+  if (!proc || !proc.pid) return;
+  if (process.platform === "win32") {
+    execFile("taskkill", ["/pid", String(proc.pid), "/T", "/F"], () => {});
+    return;
+  }
+  try {
+    process.kill(-proc.pid, "SIGTERM");
+  } catch {
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      // ignore
+    }
+  }
+  setTimeout(() => {
+    if (proc.killed) return;
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+    } catch {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+    }
+  }, 3000);
+}
+
 function domainFromUrl(url) {
   return new URL(url).hostname.replace(/^www\./, "");
 }
@@ -31,19 +66,39 @@ function isValidDomain(domain) {
   return /^[a-zA-Z0-9.-]+$/.test(domain);
 }
 
-// When a batch includes multiple category-tagged jobs for the same domain,
-// scrape.js writes each one to its own <tag>-raw-pages.json to avoid
-// clobbering. This combines every *-raw-pages.json file in that domain's
-// output folder into the single <domain>-raw-pages.json file the rest of
-// the app (and Claude Code's extraction step) expects, deduping by
+// scrape.js writes each category's raw pages into its own
+// output/<domain>/<tag-slug>/<tag-slug>-raw-pages.json (one subfolder per
+// category, alongside that category's images/ folder). This walks every
+// subfolder under the domain looking for *-raw-pages.json files and combines
+// them into the single output/<domain>/<domain>-raw-pages.json file the rest
+// of the app (and Claude Code's extraction step) expects, deduping by
 // sourceUrl so re-running a category overwrites its old entries.
+function findRawPagesFiles(dir) {
+  let results = [];
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results = results.concat(findRawPagesFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith("-raw-pages.json")) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
 function mergeDomainOutputs(domain) {
   const domainDir = path.join(OUTPUT_DIR, domain);
   const mainFile = path.join(domainDir, `${domain}-raw-pages.json`);
   if (!fs.existsSync(domainDir)) return { domain, count: 0 };
 
-  const files = fs.readdirSync(domainDir).filter((f) => f.endsWith("-raw-pages.json"));
-  if (files.length <= 1) {
+  const files = findRawPagesFiles(domainDir).filter((f) => f !== mainFile);
+  if (files.length === 0) {
     let count = 0;
     if (fs.existsSync(mainFile)) {
       try {
@@ -58,7 +113,7 @@ function mergeDomainOutputs(domain) {
   const bySourceUrl = new Map();
   for (const file of files) {
     try {
-      const records = JSON.parse(fs.readFileSync(path.join(domainDir, file), "utf-8"));
+      const records = JSON.parse(fs.readFileSync(file, "utf-8"));
       for (const record of records) {
         if (record && record.sourceUrl) bySourceUrl.set(record.sourceUrl, record);
       }
@@ -74,6 +129,7 @@ function mergeDomainOutputs(domain) {
 
 async function runBatch(batch, pushEvent) {
   for (let i = 0; i < batch.jobs.length; i++) {
+    if (batch.status === "killed") break;
     const job = batch.jobs[i];
     job.status = "running";
     const label = job.category || job.domain;
@@ -83,7 +139,8 @@ async function runBatch(batch, pushEvent) {
     if (job.category) args.push("--tag", job.category);
 
     await new Promise((resolve) => {
-      const proc = spawn(process.execPath, args, { cwd: ROOT });
+      const proc = spawn(process.execPath, args, { cwd: ROOT, detached: process.platform !== "win32" });
+      batch.procs.push(proc);
 
       proc.stdout.on("data", (d) =>
         pushEvent("log", { jobIndex: i, label, text: d.toString(), stream: "stdout" })
@@ -92,12 +149,12 @@ async function runBatch(batch, pushEvent) {
         pushEvent("log", { jobIndex: i, label, text: d.toString(), stream: "stderr" })
       );
       proc.on("close", (code) => {
-        job.status = code === 0 ? "done" : "error";
+        if (job.status !== "killed") job.status = code === 0 ? "done" : "error";
         pushEvent("job-complete", { jobIndex: i, status: job.status });
         resolve();
       });
       proc.on("error", (err) => {
-        job.status = "error";
+        if (job.status !== "killed") job.status = "error";
         pushEvent("log", { jobIndex: i, label, text: `Failed to start scraper: ${err.message}`, stream: "stderr" });
         pushEvent("job-complete", { jobIndex: i, status: "error" });
         resolve();
@@ -107,8 +164,8 @@ async function runBatch(batch, pushEvent) {
 
   const uniqueDomains = [...new Set(batch.jobs.map((j) => j.domain))];
   batch.merged = uniqueDomains.map(mergeDomainOutputs);
-  batch.status = "done";
-  pushEvent("batch-complete", { status: "done", merged: batch.merged });
+  if (batch.status !== "killed") batch.status = "done";
+  pushEvent("batch-complete", { status: batch.status, merged: batch.merged });
   for (const client of batch.clients) client.end();
   batch.clients.clear();
 }
@@ -140,7 +197,7 @@ app.post("/api/scrape-batch", (req, res) => {
   }
 
   const batchId = crypto.randomUUID();
-  const batch = { jobs: parsedJobs, logs: [], clients: new Set(), status: "running", merged: [] };
+  const batch = { jobs: parsedJobs, logs: [], clients: new Set(), status: "running", merged: [], procs: [] };
   batches.set(batchId, batch);
 
   const pushEvent = (event, data) => {
@@ -150,6 +207,7 @@ app.post("/api/scrape-batch", (req, res) => {
       client.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     }
   };
+  batch.pushEvent = pushEvent;
 
   runBatch(batch, pushEvent).catch((err) => {
     batch.status = "error";
@@ -159,6 +217,30 @@ app.post("/api/scrape-batch", (req, res) => {
   });
 
   res.json({ batchId, jobs: parsedJobs.map((j) => ({ url: j.url, category: j.category, domain: j.domain })) });
+});
+
+app.post("/api/kill-batch/:batchId", (req, res) => {
+  const batch = batches.get(req.params.batchId);
+  if (!batch) return res.status(404).json({ error: "Batch not found" });
+  // Idempotent: a batch that already finished or was already killed just
+  // reports success with nothing left to kill, instead of erroring -- a
+  // stray double-click (e.g. while the UI hasn't caught up with the last
+  // kill yet) shouldn't look like the killswitch failed.
+  if (batch.status !== "running") return res.json({ ok: true, killed: 0 });
+
+  batch.status = "killed";
+  for (const proc of batch.procs) {
+    killProcessTree(proc);
+  }
+
+  batch.jobs.forEach((job, jobIndex) => {
+    if (job.status === "pending" || job.status === "running") {
+      job.status = "killed";
+      batch.pushEvent("job-complete", { jobIndex, status: "killed" });
+    }
+  });
+
+  res.json({ ok: true, killed: batch.procs.length });
 });
 
 app.get("/api/scrape-batch/:batchId/events", (req, res) => {
@@ -241,9 +323,8 @@ app.get("/api/outputs", (req, res) => {
         // folder vanished between readdir and stat -- leave mtime null
       }
       try {
-        for (const f of fs.readdirSync(domainDir)) {
-          if (!f.endsWith("-raw-pages.json")) continue;
-          const stat = fs.statSync(path.join(domainDir, f));
+        for (const f of findRawPagesFiles(domainDir)) {
+          const stat = fs.statSync(f);
           if (!mtime || stat.mtime > mtime) mtime = stat.mtime;
         }
       } catch {
