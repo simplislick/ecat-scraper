@@ -22,7 +22,7 @@ export default function App() {
   const [mergedResults, setMergedResults] = useState([]); // [{domain, count}]
   const [formError, setFormError] = useState(null);
   const [history, setHistory] = useState([]);
-  const [sidebarTab, setSidebarTab] = useState("queue"); // queue | terminal
+  const [sidebarTab, setSidebarTab] = useState("queue"); // queue | terminal | history
   const [folderError, setFolderError] = useState(null);
   const [killError, setKillError] = useState(null);
   const [killing, setKilling] = useState(false);
@@ -245,10 +245,6 @@ export default function App() {
     }
   }
 
-  function downloadJson(d) {
-    window.location.href = `/api/download/${encodeURIComponent(d)}`;
-  }
-
   async function openOutputFolder(domain) {
     setFolderError(null);
     try {
@@ -326,15 +322,24 @@ export default function App() {
         </div>
 
         <div className="scrape-actions-row">
-          <button type="submit" className="submit-btn" disabled={status === "running"}>
-            {status === "running" ? "Scraping…" : `Start Scrape${rows.length > 1 ? " Queue" : ""}`}
-          </button>
+          <h3 className="url-scrape-heading">URL scrape</h3>
+          <div className="scrape-actions-right">
+            <button
+              type="button"
+              className="clear-rows"
+              onClick={clearRows}
+              disabled={rows.length === 1 && !rows[0].url.trim() && rows[0].tags.length === 0 && !rows[0].tagInput.trim()}
+            >
+              Clear all
+            </button>
+            <button type="submit" className="submit-btn" disabled={status === "running"}>
+              {status === "running" ? "Scraping…" : `Start Scrape${rows.length > 1 ? " Queue" : ""}`}
+            </button>
+          </div>
         </div>
         {formError && <p className="error-text">{formError}</p>}
 
         <div className="url-scrape-card">
-          <h3>URL scrape</h3>
-
           <div className="queue">
             {rows.map((row, i) => (
               <div className="queue-row" key={row.id}>
@@ -385,14 +390,6 @@ export default function App() {
             <button type="button" className="add-row" onClick={addRow}>
               + Add another URL
             </button>
-            <button
-              type="button"
-              className="clear-rows"
-              onClick={clearRows}
-              disabled={rows.length === 1 && !rows[0].url.trim() && rows[0].tags.length === 0 && !rows[0].tagInput.trim()}
-            >
-              Clear all
-            </button>
           </div>
         </div>
 
@@ -404,13 +401,6 @@ export default function App() {
             Scrape complete —{" "}
             {mergedResults.map((m) => `${m.domain} (${m.count} items)`).join(", ")}
           </span>
-          <div className="result-actions">
-            {mergedResults.map((m) => (
-              <button key={m.domain} onClick={() => downloadJson(m.domain)}>
-                Export {m.domain}
-              </button>
-            ))}
-          </div>
         </div>
       )}
       {status === "error" && (
@@ -423,25 +413,6 @@ export default function App() {
           <span>Scrape stopped — remaining queued jobs were cancelled.</span>
         </div>
       )}
-      </section>
-
-      <section className="history">
-        <h2>Previous scrapes</h2>
-        {history.length === 0 && <p className="muted">No scrapes yet.</p>}
-        {folderError && <p className="error-text">{folderError}</p>}
-        {history.map((h) => (
-          <div key={h.domain} className="history-row">
-            <div className="history-info">
-              <span className="history-domain">{h.domain}</span>
-              <span className="muted">
-                {h.exists ? `${h.count} items · ${formatDate(h.mtime)}` : "no data file"}
-              </span>
-            </div>
-            <div className="history-actions">
-              <button onClick={() => openOutputFolder(h.domain)}>Open Output Folder</button>
-            </div>
-          </div>
-        ))}
       </section>
       </div>
 
@@ -460,6 +431,13 @@ export default function App() {
             onClick={() => setSidebarTab("terminal")}
           >
             Terminal
+          </button>
+          <button
+            type="button"
+            className={sidebarTab === "history" ? "active" : ""}
+            onClick={() => setSidebarTab("history")}
+          >
+            History
           </button>
           {status === "running" && (
             <button
@@ -492,15 +470,38 @@ export default function App() {
               ))}
             </div>
           )
-        ) : logs.length === 0 ? (
-          <p className="queue-empty">No output yet.</p>
+        ) : sidebarTab === "terminal" ? (
+          logs.length === 0 ? (
+            <p className="queue-empty">No output yet.</p>
+          ) : (
+            <div className="log-panel" ref={logRef}>
+              {logs.map((l, i) => (
+                <pre key={i} className={`log-line ${l.stream}`}>
+                  [{l.label}] {l.text}
+                </pre>
+              ))}
+            </div>
+          )
         ) : (
-          <div className="log-panel" ref={logRef}>
-            {logs.map((l, i) => (
-              <pre key={i} className={`log-line ${l.stream}`}>
-                [{l.label}] {l.text}
-              </pre>
-            ))}
+          <div className="history-list">
+            {folderError && <p className="error-text">{folderError}</p>}
+            {history.length === 0 ? (
+              <p className="queue-empty">No scrapes yet.</p>
+            ) : (
+              history.map((h) => (
+                <div key={h.domain} className="history-row">
+                  <div className="history-info">
+                    <span className="history-domain">{h.domain}</span>
+                    <span className="muted">
+                      {h.exists ? `${h.count} items · ${formatDate(h.mtime)}` : "no data file"}
+                    </span>
+                  </div>
+                  <div className="history-actions">
+                    <button onClick={() => openOutputFolder(h.domain)}>Open Output Folder</button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
       </aside>
