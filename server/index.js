@@ -67,8 +67,9 @@ function isValidDomain(domain) {
 }
 
 // scrape.js writes each category's raw pages into its own
-// output/<domain>/<tag-slug>/<tag-slug>-raw-pages.json (one subfolder per
-// category, alongside that category's images/ folder). This walks every
+// output/<domain>/<domain>_<tag-slug>/<domain>_<tag-slug>-raw-pages.json
+// (one subfolder per category, alongside that category's images/ folder).
+// This walks every
 // subfolder under the domain looking for *-raw-pages.json files and combines
 // them into the single output/<domain>/<domain>-raw-pages.json file the rest
 // of the app (and Claude Code's extraction step) expects, deduping by
@@ -189,7 +190,7 @@ app.post("/api/scrape-batch", (req, res) => {
     }
     parsedJobs.push({
       url: j.url.trim(),
-      limit: j.limit ? parseInt(j.limit, 10) || 100 : 100,
+      limit: j.limit ? parseInt(j.limit, 10) || 10 : 10,
       category: j.category && String(j.category).trim() ? String(j.category).trim() : null,
       domain,
       status: "pending",

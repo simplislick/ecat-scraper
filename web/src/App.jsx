@@ -12,8 +12,7 @@ function emptyRow() {
 
 export default function App() {
   const [rows, setRows] = useState([emptyRow()]);
-  const [limit, setLimit] = useState(100);
-  const [discoverMode, setDiscoverMode] = useState(false);
+  const [limit, setLimit] = useState(10);
   const [hubUrl, setHubUrl] = useState("");
   const [discovering, setDiscovering] = useState(false);
   const [discoverError, setDiscoverError] = useState(null);
@@ -47,6 +46,16 @@ export default function App() {
     } catch {
       // ignore -- the history panel just stays empty
     }
+  }
+
+  function clampLimit(value) {
+    const n = parseInt(value, 10);
+    if (Number.isNaN(n)) return 1;
+    return Math.min(500, Math.max(1, n));
+  }
+
+  function stepLimit(delta) {
+    setLimit((prev) => clampLimit((parseInt(prev, 10) || 0) + delta));
   }
 
   function addRow() {
@@ -267,28 +276,40 @@ export default function App() {
       <div className="main">
       <section className="scrape-card">
       <form className="scrape-form" onSubmit={startBatch}>
-        <label>
-          Limit per URL
-          <input
-            type="number"
-            min="1"
-            max="500"
-            value={limit}
-            onChange={(e) => setLimit(e.target.value)}
-          />
-        </label>
+        <div className="top-row">
+          <div className="limit-card">
+            <h3>Limit/URL</h3>
+            <div className="limit-stepper">
+              <button
+                type="button"
+                className="limit-btn minus"
+                onClick={() => stepLimit(-1)}
+                aria-label="Decrease limit"
+              >
+                &minus;
+              </button>
+              <input
+                type="number"
+                min="1"
+                max="500"
+                value={limit}
+                onChange={(e) => setLimit(e.target.value)}
+                onBlur={(e) => setLimit(clampLimit(e.target.value))}
+              />
+              <button
+                type="button"
+                className="limit-btn plus"
+                onClick={() => stepLimit(1)}
+                aria-label="Increase limit"
+              >
+                +
+              </button>
+            </div>
+          </div>
 
-        <label className="toggle-row">
-          <input
-            type="checkbox"
-            checked={discoverMode}
-            onChange={(e) => setDiscoverMode(e.target.checked)}
-          />
-          Discover categories from a hub page
-        </label>
+          <div className="discover-card">
+            <h3>Get URLs</h3>
 
-        {discoverMode && (
-          <div className="discover-panel">
             <div className="discover-row">
               <input
                 type="url"
@@ -300,79 +321,81 @@ export default function App() {
                 {discovering ? "Discovering…" : "Discover"}
               </button>
             </div>
-            <p className="discover-hint">
-              Fetches the page and lists candidate category links below for you to review, edit,
-              or remove before scraping -- nothing runs automatically.
-            </p>
             {discoverError && <p className="error-text">{discoverError}</p>}
           </div>
-        )}
-
-        <div className="queue">
-          {rows.map((row, i) => (
-            <div className="queue-row" key={row.id}>
-              <input
-                type="url"
-                placeholder="https://www.heartglobal.net/acoustic-panels-all/premium"
-                value={row.url}
-                onChange={(e) => updateRow(row.id, "url", e.target.value)}
-                required={i === 0}
-              />
-              <div className="tag-input">
-                {row.tags.map((tag) => (
-                  <span className="tag-chip" key={tag}>
-                    {tag}
-                    <button
-                      type="button"
-                      className="tag-chip-remove"
-                      onClick={() => removeTag(row.id, tag)}
-                      aria-label={`Remove tag ${tag}`}
-                    >
-                      &times;
-                    </button>
-                  </span>
-                ))}
-                <input
-                  type="text"
-                  placeholder={row.tags.length ? "" : "Category tag (optional, e.g. Premium) — Enter to add"}
-                  value={row.tagInput}
-                  onChange={(e) => updateRow(row.id, "tagInput", e.target.value)}
-                  onKeyDown={(e) => handleTagInputKeyDown(e, row.id)}
-                  onBlur={() => addTag(row.id)}
-                />
-              </div>
-              <button
-                type="button"
-                className="remove-row"
-                onClick={() => removeRow(row.id)}
-                disabled={rows.length === 1}
-                aria-label="Remove row"
-              >
-                &times;
-              </button>
-            </div>
-          ))}
         </div>
 
-        <div className="row-actions">
-          <button type="button" className="add-row" onClick={addRow}>
-            + Add another URL
-          </button>
-          <button
-            type="button"
-            className="clear-rows"
-            onClick={clearRows}
-            disabled={rows.length === 1 && !rows[0].url.trim() && rows[0].tags.length === 0 && !rows[0].tagInput.trim()}
-          >
-            Clear all
+        <div className="scrape-actions-row">
+          <button type="submit" className="submit-btn" disabled={status === "running"}>
+            {status === "running" ? "Scraping…" : `Start Scrape${rows.length > 1 ? " Queue" : ""}`}
           </button>
         </div>
-
-        <button type="submit" className="submit-btn" disabled={status === "running"}>
-          {status === "running" ? "Scraping…" : `Start Scrape${rows.length > 1 ? " Queue" : ""}`}
-        </button>
-
         {formError && <p className="error-text">{formError}</p>}
+
+        <div className="url-scrape-card">
+          <h3>URL scrape</h3>
+
+          <div className="queue">
+            {rows.map((row, i) => (
+              <div className="queue-row" key={row.id}>
+                <input
+                  type="url"
+                  placeholder="https://www.heartglobal.net/acoustic-panels-all/premium"
+                  value={row.url}
+                  onChange={(e) => updateRow(row.id, "url", e.target.value)}
+                  required={i === 0}
+                />
+                <div className="tag-input">
+                  {row.tags.map((tag) => (
+                    <span className="tag-chip" key={tag}>
+                      {tag}
+                      <button
+                        type="button"
+                        className="tag-chip-remove"
+                        onClick={() => removeTag(row.id, tag)}
+                        aria-label={`Remove tag ${tag}`}
+                      >
+                        &times;
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    type="text"
+                    placeholder={row.tags.length ? "" : "Category tag (optional, e.g. Premium) — Enter to add"}
+                    value={row.tagInput}
+                    onChange={(e) => updateRow(row.id, "tagInput", e.target.value)}
+                    onKeyDown={(e) => handleTagInputKeyDown(e, row.id)}
+                    onBlur={() => addTag(row.id)}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="remove-row"
+                  onClick={() => removeRow(row.id)}
+                  disabled={rows.length === 1}
+                  aria-label="Remove row"
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="row-actions">
+            <button type="button" className="add-row" onClick={addRow}>
+              + Add another URL
+            </button>
+            <button
+              type="button"
+              className="clear-rows"
+              onClick={clearRows}
+              disabled={rows.length === 1 && !rows[0].url.trim() && rows[0].tags.length === 0 && !rows[0].tagInput.trim()}
+            >
+              Clear all
+            </button>
+          </div>
+        </div>
+
       </form>
 
       {status === "done" && mergedResults.length > 0 && (

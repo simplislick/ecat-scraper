@@ -1,7 +1,7 @@
 // scrape.js
-// Usage: node scrape.js <baseUrl> [--limit 100] [--category carpet] [--tag "Premium"]
+// Usage: node scrape.js <baseUrl> [--limit 10] [--category carpet] [--tag "Premium"]
 //
-// Example: node scrape.js https://www.pepperwall.net --limit 100
+// Example: node scrape.js https://www.pepperwall.net --limit 10
 //
 // --tag labels every output record with a `category` field and writes to a
 // tag-specific output file (output/<domain>/<tag-slug>/<tag-slug>-raw-pages.json)
@@ -31,11 +31,11 @@ const { launchBrowser } = require("./lib/browser");
 const args = process.argv.slice(2);
 const baseUrl = args[0];
 if (!baseUrl) {
-  console.error("Usage: node scrape.js <baseUrl> [--limit 100] [--category carpet]");
+  console.error("Usage: node scrape.js <baseUrl> [--limit 10] [--category carpet]");
   process.exit(1);
 }
 const limitFlagIndex = args.indexOf("--limit");
-const limit = limitFlagIndex !== -1 ? parseInt(args[limitFlagIndex + 1], 10) : 100;
+const limit = limitFlagIndex !== -1 ? parseInt(args[limitFlagIndex + 1], 10) : 10;
 const categoryFlagIndex = args.indexOf("--category");
 const categoryFilter = categoryFlagIndex !== -1 ? args[categoryFlagIndex + 1].toLowerCase() : null;
 const tagFlagIndex = args.indexOf("--tag");
@@ -51,16 +51,20 @@ function slugifyTag(text) {
 const domain = new URL(baseUrl).hostname.replace(/^www\./, "");
 const outputDir = path.join(__dirname, "output", domain);
 // The domain folder (output/<domain>) is the brand-level folder; each
-// category tag gets its own subfolder underneath -- both the raw-pages JSON
-// and the images for that category live inside it -- so different
-// categories on the same site never share a folder. The server's batch
-// merge step (mergeDomainOutputs) later combines every category subfolder's
-// JSON into one output/<domain>/<domain>-raw-pages.json for export.
+// category tag gets its own subfolder underneath, named <domain>_<tag-slug>
+// (e.g. "archiproducts.com_toilet") so the folder is identifiable on its own
+// without needing the parent domain folder for context -- both the
+// raw-pages JSON and the images for that category live inside it, so
+// different categories on the same site never share a folder. The server's
+// batch merge step (mergeDomainOutputs) later combines every category
+// subfolder's JSON into one output/<domain>/<domain>-raw-pages.json for
+// export.
 const categorySlug = tag ? slugifyTag(tag) : "uncategorized";
-const categoryDir = path.join(outputDir, categorySlug);
+const categoryFolderName = `${domain}_${categorySlug}`;
+const categoryDir = path.join(outputDir, categoryFolderName);
 const imagesDir = path.join(categoryDir, "images");
 fs.mkdirSync(imagesDir, { recursive: true });
-const outFile = path.join(categoryDir, `${categorySlug}-raw-pages.json`);
+const outFile = path.join(categoryDir, `${categoryFolderName}-raw-pages.json`);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -319,7 +323,7 @@ async function downloadImage(imageUrl, slug) {
     const filename = `${slug}${ext}`;
     const buffer = Buffer.from(await res.arrayBuffer());
     fs.writeFileSync(path.join(imagesDir, filename), buffer);
-    return `${categorySlug}/images/${filename}`;
+    return `${categoryFolderName}/images/${filename}`;
   } catch {
     return null;
   }
