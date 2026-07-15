@@ -63,13 +63,13 @@ There is also a nested folder `ecat-scraper/ecat-scraper/` that is a legacy copy
 Entry point for command-line scraping. It accepts:
 
 ```bash
-node scrape.js <baseUrl> [--limit 100] [--category carpet] [--tag "Premium"]
+node scrape.js <baseUrl> [--limit 10] [--category carpet] [--tag "Premium"]
 ```
 
 Behavior:
-- `--limit` defaults to `100`, maximum used by the UI is `500`.
+- `--limit` defaults to `10`, maximum used by the UI is `500`.
 - `--category` filters discovered URLs by a substring match on the URL.
-- `--tag` labels every record with a `category` field and writes output to `output/<domain>/<tag-slug>-raw-pages.json` instead of the default `<domain>-raw-pages.json`. Use this when a supplier splits its catalog across several category URLs.
+- `--tag` labels every record with a `category` field and writes output to `output/<domain>/<domain>_<tag-slug>/<domain>_<tag-slug>-raw-pages.json` (e.g. `output/archiproducts.com/archiproducts.com_toilet/archiproducts.com_toilet-raw-pages.json`) instead of the default `output/<domain>/<domain>_uncategorized/`. Use this when a supplier splits its catalog across several category URLs.
 
 Discovery pipeline:
 1. Try sitemap discovery at `/sitemap.xml`, `/sitemap_index.xml`, `/sitemap-products.xml`, `/product-sitemap.xml`.
