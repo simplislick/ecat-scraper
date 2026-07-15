@@ -1,0 +1,13 @@
+{
+  "name": "ecat-scraper",
+  "version": "1.0.0",
+  "description": "Scrapes material supplier sites into raw page data for Claude Code to structure into eCAT Material Library format",
+  "type": "commonjs",
+  "main": "scrape.js",
+  "scripts": {
+    "scrape": "node scrape.js"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}
