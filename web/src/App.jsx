@@ -25,7 +25,10 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [sidebarTab, setSidebarTab] = useState("queue"); // queue | terminal
   const [folderError, setFolderError] = useState(null);
+  const [killError, setKillError] = useState(null);
+  const [killing, setKilling] = useState(false);
   const logRef = useRef(null);
+  const batchIdRef = useRef(null);
 
   useEffect(() => {
     refreshHistory();
@@ -52,6 +55,11 @@ export default function App() {
 
   function removeRow(id) {
     setRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
+  }
+
+  function clearRows() {
+    setRows([emptyRow()]);
+    setFormError(null);
   }
 
   function updateRow(id, field, value) {
@@ -174,6 +182,7 @@ export default function App() {
     }
 
     const { batchId } = await res.json();
+    batchIdRef.current = batchId;
 
     const es = new EventSource(`/api/scrape-batch/${batchId}/events`);
 
@@ -207,6 +216,24 @@ export default function App() {
     es.onerror = () => {
       es.close();
     };
+  }
+
+  async function killBatch() {
+    const batchId = batchIdRef.current;
+    if (!batchId) return;
+    setKillError(null);
+    setKilling(true);
+    try {
+      const res = await fetch(`/api/kill-batch/${batchId}`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setKillError(err.error || "Failed to kill the running batch");
+      }
+    } catch {
+      setKillError("Could not reach the scraper API. Is the server running?");
+    } finally {
+      setKilling(false);
+    }
   }
 
   function downloadJson(d) {
@@ -327,9 +354,19 @@ export default function App() {
           ))}
         </div>
 
-        <button type="button" className="add-row" onClick={addRow}>
-          + Add another URL
-        </button>
+        <div className="row-actions">
+          <button type="button" className="add-row" onClick={addRow}>
+            + Add another URL
+          </button>
+          <button
+            type="button"
+            className="clear-rows"
+            onClick={clearRows}
+            disabled={rows.length === 1 && !rows[0].url.trim() && rows[0].tags.length === 0 && !rows[0].tagInput.trim()}
+          >
+            Clear all
+          </button>
+        </div>
 
         <button type="submit" className="submit-btn" disabled={status === "running"}>
           {status === "running" ? "Scraping…" : `Start Scrape${rows.length > 1 ? " Queue" : ""}`}
@@ -356,6 +393,11 @@ export default function App() {
       {status === "error" && (
         <div className="result-banner error">
           <span>Scrape failed — check the Terminal tab in the queue panel for details.</span>
+        </div>
+      )}
+      {status === "killed" && (
+        <div className="result-banner error">
+          <span>Scrape stopped — remaining queued jobs were cancelled.</span>
         </div>
       )}
       </section>
@@ -396,7 +438,19 @@ export default function App() {
           >
             Terminal
           </button>
+          {status === "running" && (
+            <button
+              type="button"
+              className="kill-switch"
+              onClick={killBatch}
+              disabled={killing}
+              title="Kill all running and queued jobs"
+            >
+              {killing ? "Killing…" : "Kill"}
+            </button>
+          )}
         </div>
+        {killError && <p className="error-text">{killError}</p>}
 
         {sidebarTab === "queue" ? (
           jobStatuses.length === 0 ? (

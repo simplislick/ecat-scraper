@@ -3,10 +3,17 @@
 // "scrapeableFields" are ones we ask Claude to try to extract from a
 // supplier page. "manualOnlyFields" are internal/relationship data
 // that rarely exists on a public site -- left null for manual entry later.
+//
+// productName and manufacturer are now populated directly by scrape.js
+// (extractProductInfo, via JSON-LD/meta/heading/breadcrumb heuristics) and
+// already sit on each raw-pages.json record -- prefer those values as-is
+// over re-deriving them from rawText, and only fall back to rawText if
+// they came back null for a given page.
 
 module.exports = {
   scrapeableFields: {
     productName: "The product's display name",
+    manufacturer: "The brand/manufacturer name",
     category: "Material category, e.g. Carpet, Tile, Vinyl, Wallcovering, Laminate",
     productCode: "Product code, SKU, or pattern name/number",
     dimensions: "Physical size, e.g. '50cm x 50cm' or '600 x 600mm'",
@@ -33,7 +40,6 @@ module.exports = {
   },
   manualOnlyFields: [
     "supplierCompanyName",
-    "manufacturer",
     "contactPerson",
     "contactNumber",
     "contactEmail",

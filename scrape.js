@@ -4,11 +4,12 @@
 // Example: node scrape.js https://www.pepperwall.net --limit 100
 //
 // --tag labels every output record with a `category` field and writes to a
-// tag-specific output file (output/<domain>/<tag-slug>-raw-pages.json)
-// instead of the default <domain>-raw-pages.json. Use this when a supplier
-// splits their catalog across several category URLs (e.g. one URL per
-// product line) -- run scrape.js once per URL with a different --tag, then
-// combine the results (the web UI's batch mode does this automatically).
+// tag-specific output file (output/<domain>/<tag-slug>/<tag-slug>-raw-pages.json)
+// instead of the default output/<domain>/uncategorized/<domain>-raw-pages.json.
+// Use this when a supplier splits their catalog across several category URLs
+// (e.g. one URL per product line) -- run scrape.js once per URL with a
+// different --tag, then combine the results (the web UI's batch mode does
+// this automatically into output/<domain>/<domain>-raw-pages.json).
 //
 // This script does the FREE, no-API-key part only:
 //   1. DISCOVER  - find product page URLs via sitemap.xml, fall back to crawling
@@ -49,11 +50,17 @@ function slugifyTag(text) {
 
 const domain = new URL(baseUrl).hostname.replace(/^www\./, "");
 const outputDir = path.join(__dirname, "output", domain);
-const imagesDir = path.join(outputDir, "images");
+// The domain folder (output/<domain>) is the brand-level folder; each
+// category tag gets its own subfolder underneath -- both the raw-pages JSON
+// and the images for that category live inside it -- so different
+// categories on the same site never share a folder. The server's batch
+// merge step (mergeDomainOutputs) later combines every category subfolder's
+// JSON into one output/<domain>/<domain>-raw-pages.json for export.
+const categorySlug = tag ? slugifyTag(tag) : "uncategorized";
+const categoryDir = path.join(outputDir, categorySlug);
+const imagesDir = path.join(categoryDir, "images");
 fs.mkdirSync(imagesDir, { recursive: true });
-const outFile = tag
-  ? path.join(outputDir, `${slugifyTag(tag)}-raw-pages.json`)
-  : path.join(outputDir, `${domain}-raw-pages.json`);
+const outFile = path.join(categoryDir, `${categorySlug}-raw-pages.json`);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -76,29 +83,21 @@ function extractUrlsFromSitemapXml(xml) {
 
 const PRODUCT_URL_HINTS = ["product", "products", "shop", "item", "collection", "material", "catalog"];
 
-// Catalog sites often expose brand/style/color-filtered LISTING pages
-// under the same "/products/" path as real products (e.g.
-// archiproducts.com's /en/products/sofas/brand_mantellassi-1926, plus its
-// pagination at .../brand_mantellassi-1926/2 and combined-filter variants
-// like .../brand_mantellassi-1926_5a-design). None of the sites we target
-// actually name a real product starting with one of these filter words, so
-// any URL with such a segment anywhere in its path is excluded outright --
-// otherwise these listing pages get scraped as if they were one product,
-// and their image gallery ends up being a grab-bag of every other
-// product's thumbnail shown in that listing.
-const NON_PRODUCT_SEGMENT_PREFIXES = ["brand", "style", "collection", "color", "colour", "material", "finish", "category", "sort"];
+// A hub/category page is always shallower in the URL path than the
+// individual product pages it links to, on any site -- so a same-depth
+// same-origin link found on (or discovered alongside) the hub page is a
+// sibling listing/taxonomy page, not one of its products, while a deeper
+// link is plausibly a real product. This is used instead of a hardcoded
+// per-site keyword list (e.g. matching "brand_"/"style_" segments) so the
+// same logic works generically across different suppliers' URL schemes.
+const baseUrlDepth = new URL(baseUrl).pathname.split("/").filter(Boolean).length;
 
-function hasListingFilterSegment(url) {
-  let segments;
+function isDeeperThanHub(url) {
   try {
-    segments = new URL(url).pathname.split("/").filter(Boolean);
+    return new URL(url).pathname.split("/").filter(Boolean).length > baseUrlDepth;
   } catch {
     return false;
   }
-  return segments.some((seg) => {
-    const lower = seg.toLowerCase();
-    return NON_PRODUCT_SEGMENT_PREFIXES.some((p) => lower.startsWith(`${p}_`) || lower.startsWith(`${p}-`));
-  });
 }
 
 function looksLikeProductUrl(url) {
@@ -106,23 +105,18 @@ function looksLikeProductUrl(url) {
   const hasHint = PRODUCT_URL_HINTS.some((h) => lower.includes(`/${h}/`) || lower.includes(`/${h}s/`));
   const notCategoryIndex = !lower.endsWith("/products/") && !lower.endsWith("/shop/") && !lower.endsWith("/collections/");
   const matchesCategory = categoryFilter ? lower.includes(categoryFilter) : true;
-  return hasHint && notCategoryIndex && matchesCategory && !hasListingFilterSegment(url);
+  return hasHint && notCategoryIndex && matchesCategory && isDeeperThanHub(url);
 }
 
 // Many catalog sites tack a numeric product id onto the last path segment
-// of a real product-detail URL (e.g. archiproducts.com's
-// /en/products/edra/sofa-anywhere_784567), while their taxonomy/category
-// pages (e.g. /en/products/sofas) don't. looksLikeProductUrl's "/products/"
-// hint alone can't tell these apart, so when both kinds of URL turn up in
-// the same crawl, prefer the ones with an id suffix -- category pages all
-// share one representative thumbnail, which is what caused duplicate
-// images across "different" scraped products.
-//
-// Brand names that embed a founding year (brand_mantellassi-1926,
-// brand_riva-1920) look exactly like an id suffix, but those are already
-// filtered out by looksLikeProductUrl above; real ids we've seen run to
-// 5-6 digits while years are always 4, so require 5+ digits as a second
-// line of defense against the same kind of false positive elsewhere.
+// of a real product-detail URL, while their taxonomy/category pages don't.
+// looksLikeProductUrl's hint + depth checks alone can't always tell these
+// apart, so when both kinds of URL turn up in the same crawl, prefer the
+// ones with an id suffix -- category pages all share one representative
+// thumbnail, which is what caused duplicate images across "different"
+// scraped products. Ids we've seen run to 5-6 digits; require 5+ digits so
+// a 4-digit founding year embedded in a name (e.g. "-1926") isn't mistaken
+// for one.
 function hasNumericIdSuffix(url) {
   let pathname;
   try {
@@ -146,7 +140,7 @@ function looksLikeProductUrlLoose(url) {
   const lower = url.toLowerCase();
   const isExcluded = NON_PRODUCT_HINTS.some((h) => lower.includes(h));
   if (isExcluded) return false;
-  if (hasListingFilterSegment(url)) return false;
+  if (!isDeeperThanHub(url)) return false;
   const matchesCategory = categoryFilter ? lower.includes(categoryFilter) : true;
   if (!matchesCategory) return false;
   // heuristic: URL has at least one meaningful path segment beyond the domain,
@@ -205,6 +199,10 @@ async function discoverViaSitemap() {
       const withId = productUrls.filter(hasNumericIdSuffix);
       if (withId.length > 0) {
         console.log(`  ${withId.length} of those also carry a numeric product-id suffix -- preferring those.`);
+      } else {
+        console.log(
+          `  WARNING: none of the ${productUrls.length} matched URL(s) carry a numeric product-id suffix -- there's no strong signal telling real products apart from other listing pages here, so results may include pages that don't actually belong to this category. Spot-check the output before trusting it.`
+        );
       }
       return [...new Set(withId.length > 0 ? withId : productUrls)];
     }
@@ -248,17 +246,25 @@ async function discoverViaCrawl(browser) {
     try {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
       await sleep(500);
-      const rawLinks = await page.$$eval("a[href]", (as) => as.map((a) => a.href));
+      // Sitewide chrome (nav bars, footers, "recommended"/"best sellers"
+      // widgets in a sidebar) tends to repeat the *same* links on every
+      // page of a site, including every different category's hub page --
+      // counting those as this category's own products is how unrelated
+      // items (e.g. a sitewide bestseller) end up attributed to every
+      // category instead of just the one that actually contains them.
+      // Excluding standard semantic chrome regions keeps this closer to
+      // each page's actual content area.
+      const rawLinks = await page.$$eval("a[href]", (as) =>
+        as.filter((a) => !a.closest("nav, header, footer, aside")).map((a) => a.href)
+      );
       console.log(`    found ${rawLinks.length} links on this page`);
       for (const rawLink of rawLinks) {
-        // Match same-origin, not same-path-prefix: when the scrape target
-        // is a deep category/listing page (e.g. the web UI's "discover
-        // from a hub page" flow queuing a category link directly), real
-        // product pages usually live under a *different* path on the same
-        // site (e.g. /en/products/<brand>/<product>_<id> vs. the category
-        // at /en/products/<category>/brand_<brand>) -- a startsWith(baseUrl)
-        // check would exclude all of them and leave nothing but variants
-        // of the same starting page to "discover".
+        // Match same-origin, not same-path-prefix: real product pages don't
+        // necessarily live under the exact same path as the category/hub
+        // page you started from -- a startsWith(baseUrl) check would
+        // exclude legitimate products on some sites. isDeeperThanHub()
+        // (used below) is what actually keeps this scoped to the hub
+        // page's own products instead of the whole site.
         let linkOrigin;
         try {
           linkOrigin = new URL(rawLink).origin;
@@ -271,13 +277,7 @@ async function discoverViaCrawl(browser) {
           foundStrict.add(link);
           if (hasNumericIdSuffix(link)) foundStrictWithId.add(link);
         } else if (looksLikeProductUrlLoose(link)) foundLoose.add(link);
-        // Brand/style/color filter pages link to themselves combined with
-        // every other filter value (e.g. one brand's page links out to
-        // "that brand + every other brand" -- hundreds of near-duplicate
-        // combinations). Queuing those for further crawling burns the
-        // whole crawl budget on that combinatorial explosion and never
-        // reaches an actual product page, so don't follow them.
-        if (!visited.has(link) && toVisit.length < 60 && !hasListingFilterSegment(link)) toVisit.push(link);
+        if (!visited.has(link) && toVisit.length < 60) toVisit.push(link);
       }
     } catch (e) {
       console.log(`    (skipped: ${e.message})`);
@@ -292,9 +292,17 @@ async function discoverViaCrawl(browser) {
     );
     return [...foundStrictWithId];
   }
-  if (foundStrict.size > 0) return [...foundStrict];
+  if (foundStrict.size > 0) {
+    console.log(
+      `  WARNING: ${foundStrict.size} candidate product URL(s) found, but none carry a numeric product-id suffix -- there's no strong signal telling real products apart from other listing pages here, so results may include pages that don't actually belong to this category. Spot-check the output before trusting it.`
+    );
+    return [...foundStrict];
+  }
   console.log(`  No strict matches while crawling. ${foundLoose.size} loose matches found instead.`);
   if (foundLoose.size > 0) {
+    console.log(
+      `  WARNING: falling back to the loosest match heuristic -- these are same-origin links deeper than the hub page with no other product signal, so mismatched/unrelated pages are more likely. Spot-check the output before trusting it.`
+    );
     console.log(`  Sample loose matches:`);
     [...foundLoose].slice(0, 15).forEach((u) => console.log(`    - ${u}`));
   }
@@ -311,7 +319,7 @@ async function downloadImage(imageUrl, slug) {
     const filename = `${slug}${ext}`;
     const buffer = Buffer.from(await res.arrayBuffer());
     fs.writeFileSync(path.join(imagesDir, filename), buffer);
-    return `images/${filename}`;
+    return `${categorySlug}/images/${filename}`;
   } catch {
     return null;
   }
@@ -372,6 +380,78 @@ async function extractGalleryImageUrls(page) {
   });
 }
 
+// schema.org JSON-LD ("Product" structured data) is a standards-based way
+// most e-commerce/catalog platforms already expose their own product name
+// and brand for search engines -- reading it directly works generically
+// across many different site platforms without any site-specific rules.
+// Falls back through common meta-tag conventions, then a "<Name> ... By
+// <Brand>" pattern near the main heading, then breadcrumb text, in
+// roughly descending order of reliability.
+async function extractProductInfo(page) {
+  return page.evaluate(() => {
+    const textOf = (el) => (el ? el.textContent.replace(/\s+/g, " ").trim() : null);
+    const brandNameOf = (brand) => {
+      if (!brand) return null;
+      if (typeof brand === "string") return brand.trim() || null;
+      if (typeof brand === "object") return (brand.name || "").trim() || null;
+      return null;
+    };
+    // Several sites bake "<Product Name> By <Brand>" into a single title
+    // string (og:title, <h1>, etc.) rather than exposing the brand
+    // separately, so this split is applied to whichever title text is
+    // found, not just one specific source.
+    const splitByPattern = (title) => {
+      if (!title) return { productName: null, manufacturer: null };
+      const m = title.match(/^(.*?)\s+by\s+(.+)$/i);
+      if (m) return { productName: m[1].trim() || null, manufacturer: m[2].trim() || null };
+      return { productName: title.trim() || null, manufacturer: null };
+    };
+
+    for (const block of document.querySelectorAll('script[type="application/ld+json"]')) {
+      let data;
+      try {
+        data = JSON.parse(block.textContent);
+      } catch {
+        continue;
+      }
+      const candidates = Array.isArray(data) ? data : Array.isArray(data["@graph"]) ? data["@graph"] : [data];
+      for (const item of candidates) {
+        if (!item || typeof item !== "object") continue;
+        const type = item["@type"];
+        const isProduct = type === "Product" || (Array.isArray(type) && type.includes("Product"));
+        if (!isProduct) continue;
+        const productName = (item.name || "").trim() || null;
+        const manufacturer = brandNameOf(item.brand) || brandNameOf(item.manufacturer);
+        if (productName || manufacturer) return { productName, manufacturer };
+      }
+    }
+
+    const title =
+      document.querySelector('meta[property="og:title"]')?.content ||
+      textOf(document.querySelector('[itemprop="name"]')) ||
+      textOf(document.querySelector("h1"));
+    const explicitBrand =
+      document.querySelector('meta[property="product:brand"]')?.content ||
+      document.querySelector('meta[itemprop="brand"]')?.content ||
+      textOf(document.querySelector('[itemprop="brand"] [itemprop="name"]')) ||
+      textOf(document.querySelector('[itemprop="brand"]'));
+
+    const split = splitByPattern(title);
+    if (explicitBrand) return { productName: split.productName, manufacturer: explicitBrand.trim() };
+    if (split.manufacturer) return split;
+
+    // Breadcrumb trail -- the crumb just before the current page is often
+    // the brand/category the product belongs to.
+    const crumbs = [
+      ...document.querySelectorAll('nav[aria-label="breadcrumb"] a, .breadcrumb a, [class*="breadcrumb"] a'),
+    ]
+      .map(textOf)
+      .filter(Boolean);
+
+    return { productName: split.productName, manufacturer: crumbs.length ? crumbs[crumbs.length - 1] : null };
+  });
+}
+
 // ---------- Main ----------
 
 async function main() {
@@ -386,7 +466,22 @@ async function main() {
     process.exit(1);
   }
 
-  let productUrls = await discoverViaSitemap();
+  // A domain-wide sitemap.xml lists every product on the whole site, with
+  // nothing in it tying a given URL back to the specific category/hub page
+  // the user asked to scrape. That's a correct source when baseUrl *is*
+  // the site root (scrape everything), but for a category/hub page it
+  // would silently return an unrelated slice of the whole catalog instead
+  // of that category's own products -- so only trust it at the root, and
+  // otherwise discover via crawling from the hub page itself, which is
+  // inherently scoped to whatever that specific page actually links to.
+  let productUrls = [];
+  if (baseUrlDepth === 0) {
+    productUrls = await discoverViaSitemap();
+  } else {
+    console.log(
+      "Base URL is a specific category/hub page, not the site root -- skipping sitemap discovery (it isn't scoped to this category) and crawling from the hub page instead.\n"
+    );
+  }
   if (productUrls.length === 0) {
     productUrls = await discoverViaCrawl(browser);
   }
@@ -412,6 +507,7 @@ async function main() {
 
       const pageText = await page.evaluate(() => document.body.innerText);
       const galleryImageUrls = (await extractGalleryImageUrls(page)).slice(0, MAX_IMAGES_PER_PRODUCT);
+      const { productName, manufacturer } = await extractProductInfo(page);
 
       const slug = slugify(url);
 
@@ -425,6 +521,8 @@ async function main() {
       const record = {
         sourceUrl: url,
         category: tag || null,
+        manufacturer: manufacturer || null,
+        productName: productName || null,
         rawText: pageText.slice(0, 15000), // trimmed to keep the file manageable
         thumbnailImage: downloadedImages[0]?.localPath || null,
         thumbnailSourceUrl: downloadedImages[0]?.sourceUrl || null,
